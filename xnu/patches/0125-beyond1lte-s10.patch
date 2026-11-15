@@ -1,0 +1,148 @@
+diff --git a/bsd/dev/a5xelte_touch.c b/bsd/dev/a5xelte_touch.c
+index ba647a8..8676419 100644
+--- a/bsd/dev/a5xelte_touch.c
++++ b/bsd/dev/a5xelte_touch.c
+@@ -923,7 +923,7 @@ dreamlte_touch_start(void)
+ void
+ a5xelte_touch_probe(void)
+ {
+-#if defined(DREAMLTE)
++#if defined(DREAMLTE) && !defined(BEYOND1LTE)
+ 	dreamlte_touch_start();   /* the A5 path below stays off */
+ #endif
+ 	int enabled = A5_TOUCH_DEFAULT; /* A5 touch: off on the S8 */
+diff --git a/iokit/Kernel/arm/SweetBattery.cpp b/iokit/Kernel/arm/SweetBattery.cpp
+index 0535b28..68d1161 100644
+--- a/iokit/Kernel/arm/SweetBattery.cpp
++++ b/iokit/Kernel/arm/SweetBattery.cpp
+@@ -5,6 +5,7 @@
+  * See report.md for binary evidence, register provenance and integration.
+  */
+ #if defined(ARM64_BOARD_CONFIG_SWEET) || defined(ARM64_BOARD_CONFIG_A5XELTE)
++#include <pexpert/arm64/board_config.h>
+ #include <device/device_types.h> /* io_buf_ptr_t for private OSKext headers */
+ #include <IOKit/IOLib.h>
+ #include <IOKit/IOWorkLoop.h>
+@@ -282,7 +283,7 @@ SweetBattery::start(IOService *provider)
+ 	if (!IOPMPowerSource::start(provider)) {
+ 		return false;
+ 	}
+-#if defined(ARM64_BOARD_CONFIG_A5XELTE)
++#if defined(ARM64_BOARD_CONFIG_A5XELTE) && !defined(BEYOND1LTE)
+ 	int real = 1;
+ #else
+ 	int real = 0;
+diff --git a/iokit/Kernel/arm/SweetCPU.cpp b/iokit/Kernel/arm/SweetCPU.cpp
+index 5bd24a7..c1cb316 100644
+--- a/iokit/Kernel/arm/SweetCPU.cpp
++++ b/iokit/Kernel/arm/SweetCPU.cpp
+@@ -87,7 +87,12 @@ SweetCPU::start(IOService *provider)
+ #if defined(A5XELTE)
+ 	/* Linux's Exynos7580 DT: logical 0..3 = MPIDR 0..3;
+ 	 * logical 4..7 = MPIDR 0x100..0x103. */
+-#if defined(DREAMLTE)
++#if defined(BEYOND1LTE)
++	/* Exynos 9820: logical 0..3 = A55 MPIDR 0..3, 4..5 = A75 MPIDR 4..5,
++	 * 6..7 = Mongoose M4 MPIDR 0x100..0x101. */
++	uint32_t expected_mpidr = cpu->cpu_id < 6 ? cpu->cpu_id :
++	    0x100U + cpu->cpu_id - 6;
++#elif defined(DREAMLTE)
+ 	/* Exynos 8895: logical 0..3 = A53 MPIDR 0x100..0x103 (boot cluster);
+ 	 * logical 4..7 = Mongoose M2 MPIDR 0..3. */
+ 	uint32_t expected_mpidr = cpu->cpu_id < 4 ? 0x100U + cpu->cpu_id :
+@@ -296,7 +301,7 @@ SweetCPU::startCPU(vm_offset_t start_paddr, vm_offset_t arg_paddr)
+ 	vm_offset_t entry = ml_static_vtop((vm_offset_t)&sweet_secondary_entry);
+ 	IOLog(CPU_PORT_NAME " CPU: cpu=%u CPU_ON target=0x%x entry_pa=0x%llx context=%u\n",
+ 	    getCPUNumber(), cpu->phys_id, (uint64_t)entry, getCPUNumber());
+-#if defined(DREAMLTE)
++#if defined(DREAMLTE) && !defined(BEYOND1LTE)
+ 	{
+ 		/*
+ 		 * The entry is in the high RAM bank (0x88xxxxxxx); the loader probe
+diff --git a/iokit/Kernel/arm/SweetFramebuffer.cpp b/iokit/Kernel/arm/SweetFramebuffer.cpp
+index ec6b9da..e5b367e 100644
+--- a/iokit/Kernel/arm/SweetFramebuffer.cpp
++++ b/iokit/Kernel/arm/SweetFramebuffer.cpp
+@@ -316,7 +316,7 @@ get32(const uint8_t *p, uint32_t off)
+ 	return v;
+ }
+ 
+-#if defined(DREAMLTE)
++#if defined(DREAMLTE) && !defined(BEYOND1LTE)
+ /*
+  * Boot 31 video: torn frames (top half of one screen, bottom of the
+  * next). DECON_F fetches the panel memory at 60 Hz (boot 30 probe: 30
+@@ -382,7 +382,7 @@ AppleCLCD::present(const uint8_t *rec)
+ {
+ 	uint32_t mask = get32(rec, 0x104);
+ 	IOLockLock(fPresentLock);
+-#if defined(DREAMLTE)
++#if defined(DREAMLTE) && !defined(BEYOND1LTE)
+ 	sweet_fb_wait_frame_done();
+ #endif
+ 
+diff --git a/pexpert/arm/pe_serial.c b/pexpert/arm/pe_serial.c
+index 1966bdd..d49c9cb 100644
+--- a/pexpert/arm/pe_serial.c
++++ b/pexpert/arm/pe_serial.c
+@@ -731,6 +731,11 @@ static uint32_t fbcon_cols, fbcon_rows, fbcon_col, fbcon_row;
+  * lose the same bits on every forced reboot.)
+  */
+ #define KLOG_CAP        (A5_KLOG_SIZE - 12)
++#if defined(BEYOND1LTE)
++#define KLOG_ROOM       0x1000
++#else
++#define KLOG_ROOM       0x10000
++#endif
+ static volatile uint32_t *klog_hdr;
+ static volatile uint8_t *klog_data;
+ static uint32_t klog_start, klog_size;
+@@ -746,7 +751,7 @@ klog_init(void)
+ 	klog_data = (volatile uint8_t *)(klog_hdr + 3);
+ 	/* Continue after the loader's text if its header is sane. */
+ 	if (klog_hdr[0] == 0x43474244u && klog_hdr[1] == klog_hdr[2] &&
+-	    klog_hdr[2] < KLOG_CAP - 0x10000) {
++	    klog_hdr[2] < KLOG_CAP - KLOG_ROOM) {
+ 		klog_start = klog_size = klog_hdr[2];
+ 	} else {
+ 		klog_hdr[0] = 0x43474244u;
+diff --git a/pexpert/pexpert/arm64/A5XELTE.h b/pexpert/pexpert/arm64/A5XELTE.h
+index b6f812d..56a0207 100644
+--- a/pexpert/pexpert/arm64/A5XELTE.h
++++ b/pexpert/pexpert/arm64/A5XELTE.h
+@@ -30,7 +30,27 @@
+  * cluster as the A5; the board facts that differ are below.
+  */
+ #define DREAMLTE                      1
++/* Galaxy S10 overlay on the S8 variant (see the macro block below). */
++#define BEYOND1LTE                    1
+ #if defined(DREAMLTE)
++#if defined(BEYOND1LTE)
++/*
++ * Galaxy S10 (SM-G973F, beyond1lte, Exynos 9820). Sources: live DT and
++ * /proc/iomem read from TWRP, loader M0/M1 logs (MPIDR_EL1 = 0, MIDR = A55).
++ */
++#define A5_FB_PHYS                    0xca000000  /* s3cfb.bootloaderfb (S10 cmdline) */
++#define A5_FB_WIDTH                   1440
++#define A5_FB_HEIGHT                  3040
++#define A5_FB_STRIDE                  5760        /* bytes per row */
++#define A5_FB_2M_BLOCKS               9           /* 1440*3040*4 = 8.35 x 2 MiB */
++/* 8-byte aligned slot in the loader's pmsg text: zone 0xeb30c000 + 12 + 0x7fc */
++#define A5_ENTRY_MARKER_PHYS          0xeb30c808
++#define A5_BOOT_MPIDR                 0           /* Cortex-A55 core 0 */
++#define A5_KEYS_DEFAULT               0           /* S10 ALIVE bank offsets not verified */
++#define A5_TOUCH_DEFAULT              0
++#define A5_KLOG_PHYS                  0xeb30c000  /* ramoops pmsg: 0xeb308000 + record_size 0x4000 */
++#define A5_KLOG_SIZE                  0x4000      /* 16 KiB */
++#else
+ #define A5_FB_PHYS                    0xcc000000  /* s3cfb.bootloaderfb */
+ #define A5_FB_WIDTH                   1440
+ #define A5_FB_HEIGHT                  2960
+@@ -42,6 +62,7 @@
+ #define A5_TOUCH_DEFAULT              0           /* A5 ZT7538 path absent */
+ #define A5_KLOG_PHYS                  0x92180000  /* TWRP ramoops pmsg zone */
+ #define A5_KLOG_SIZE                  0x80000
++#endif
+ /* Samsung's S8 kernel DT: arch timer "use-physical-timer". The EL1
+  * virtual timer is not usable on the secondary cores (boot 22/24: 4
+  * CPUs up, then sleeping threads and workqueue threads never ran).
